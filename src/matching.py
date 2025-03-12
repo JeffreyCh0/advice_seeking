@@ -21,7 +21,7 @@ def ir_top5(question, candidates):
             "content": [
                 {
                 "type": "text",
-                "text": "Given an English question, pick the most similar one from the list of 5 Chinese questions."
+                "text": "Given a Chinese question, pick the most similar one from the list of 5 English questions."
                 }
             ]
             },
@@ -71,18 +71,60 @@ def ir_top5(question, candidates):
     
     return json.loads(response.choices[0].message.content)["response"]
 
+def sim_check(eng_q, chi_q):
+    client = OpenAI(api_key = os.environ['OPENAI_API_KEY'])
+    user_prompt = f"# English Question:\n{eng_q}\n\n # Chinese Question:\n{chi_q}\n\n"
 
-reddit = pd.read_csv('../data/reddit_post.csv')
-reddit = reddit[["message_id", "title", "message"]]
-reddit.columns = ["message_id","question", "detail"]
-
-with open('../data/emb/similarity.pkl', 'rb') as f:
-    similarity = pickle.load(f)
-
-with open('../data/emb/zhihu_emb.pkl', 'rb') as f:
-    raw = pickle.load(f)
-    zh_sentences = raw[0]
-    zh_emb = raw[1]
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+            "role": "system",
+            "content": [
+                {
+                "type": "text",
+                "text": "Given an English question and a Chinese question, determine whether they are asking the same question."
+                }
+            ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                    "type": "text",
+                    "text": user_prompt
+                    }
+                ]
+            }
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+            "name": "similar_question_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                "response": {
+                    "type": "boolean",
+                    "description": "Whether the English question and Chinese question are asking the same question.",
+                }
+                },
+                "required": [
+                "response"
+                ],
+                "additionalProperties": False
+            }
+            }
+        },
+        temperature=1,
+        max_completion_tokens=2048,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0
+        )
+    
+    return json.loads(response.choices[0].message.content)["response"]
 
 def process_row(question_detail, choices):
     """Function to process each row"""
@@ -91,20 +133,41 @@ def process_row(question_detail, choices):
     return gpt_pick, gpt_pick_question
 
 
+reddit = pd.read_csv('../data/reddit_post.csv')
+reddit = reddit[["message_id", "title", "message"]]
+reddit.columns = ["message_id","question", "detail"]
+
+with open('../data/emb/similarity.pkl', 'rb') as f:
+    similarity = pickle.load(f)
+    similarity = similarity.T
+
+with open('../data/emb/zhihu_emb.pkl', 'rb') as f:
+    raw = pickle.load(f)
+    zh_sentences = raw[0]
+    zh_emb = raw[1]
+
+en_sentences = reddit.apply(lambda x: x['question'] + ' ' + x['detail'], axis=1).tolist()
+en_idx = reddit['message_id'].tolist()
+num_en = len(en_sentences)
+num_zh = len(zh_sentences)
+
+
+
+
 
 # Example usage
 results = []
 top_k = 5
 list_top_k = []
-
-num_samples = reddit.shape[0]
-num_sentences = len(zh_sentences)
+list_match = []
 
 # Convert to NumPy arrays for efficiency
 zh_sentences = np.array(zh_sentences, dtype=object)
-valid_mask = np.ones(num_sentences, dtype=bool)  # Track valid indices (True = selectable)
+valid_mask = np.ones(num_en, dtype=bool)  # Track valid indices (True = selectable)
 
-for i, row in tqdm(enumerate(reddit.itertuples(index=False)), total=num_samples):
+for i, zh_question in tqdm(enumerate(zh_sentences)):
+    if i == 20:
+        break
     # Select only valid columns
     valid_similarity = np.where(valid_mask, similarity[i], -np.inf)  # Set invalid columns to -inf
 
@@ -113,37 +176,46 @@ for i, row in tqdm(enumerate(reddit.itertuples(index=False)), total=num_samples)
     top_k_idx = top_k_idx[np.argsort(valid_similarity[top_k_idx])[::-1]]  # O(k log k)
 
     top_k_sim = similarity[i][top_k_idx]
-    selected_sentences = zh_sentences[top_k_idx]
+    selected_sentences = en_sentences[top_k_idx]
+    selected_idx = en_idx[top_k_idx]
 
-    list_top_k.append([(sim, sent) for sim, sent in zip(top_k_sim, selected_sentences)])
+    gpt_pick, gpt_pick_question = process_row(zh_question, selected_sentences)
+    selected_idx = top_k_idx['ABCDE'.index(gpt_pick)]
+    list_top_k.append([(sim, idx) for sim, idx in zip(top_k_sim, selected_idx)])
 
-    question_detail = f"{row.question}\n{row.detail}"
-    gpt_pick, gpt_pick_question = process_row(question_detail, selected_sentences)
-    results.append((gpt_pick, gpt_pick_question))
-
-    print(f"English: {row.question}")
-    print(f'Chinese: {gpt_pick_question}')
+    bl_match = sim_check(gpt_pick_question, zh_question)
+    
+    
+    print(f'Chinese: {zh_question}')
+    print(f"English: {gpt_pick_question}")
+    print(f"Match: {bl_match}")
 
     # Mark selected indices as unavailable (instead of deleting)
-    selected_idx = top_k_idx['ABCDE'.index(gpt_pick)]
-    valid_mask[selected_idx] = False  # These sentences are no longer selectable
+    if bl_match:
+        valid_mask[selected_idx] = False  # These sentences are no longer selectable
+        print(f"dropped: {en_sentences[selected_idx][:50]}")
+        list_match.append(selected_idx)
+    else:
+        list_match.append(False)
 
-    print(f"dropped: {zh_sentences[selected_idx]}")
     print("="*100)
 
-reddit['top_1'] = [x[0][1] for x in list_top_k]
-reddit['top_1_sim'] = [x[0][0] for x in list_top_k]
-reddit['top_2'] = [x[1][1] for x in list_top_k]
-reddit['top_2_sim'] = [x[1][0] for x in list_top_k]
-reddit['top_3'] = [x[2][1] for x in list_top_k]
-reddit['top_3_sim'] = [x[2][0] for x in list_top_k]
-reddit['top_4'] = [x[3][1] for x in list_top_k]
-reddit['top_4_sim'] = [x[3][0] for x in list_top_k]
-reddit['top_5'] = [x[4][1] for x in list_top_k]
-reddit['top_5_sim'] = [x[4][0] for x in list_top_k]
+df_output = pd.DataFrame()
 
-reddit["gpt_pick"], reddit["gpt_pick_question"] = zip(*results)
+df_output['zh_question'] = zh_sentences
+df_output['top_1'] = [x[0][1] for x in list_top_k]
+df_output['top_1_sim'] = [x[0][0] for x in list_top_k]
+df_output['top_2'] = [x[1][1] for x in list_top_k]
+df_output['top_2_sim'] = [x[1][0] for x in list_top_k]
+df_output['top_3'] = [x[2][1] for x in list_top_k]
+df_output['top_3_sim'] = [x[2][0] for x in list_top_k]
+df_output['top_4'] = [x[3][1] for x in list_top_k]
+df_output['top_4_sim'] = [x[3][0] for x in list_top_k]
+df_output['top_5'] = [x[4][1] for x in list_top_k]
+df_output['top_5_sim'] = [x[4][0] for x in list_top_k]
+
+df_output["gpt_pick_question"] = list_match
 
 
 
-reddit.to_csv('../data/matched_gpt_4o_mini.csv', index=False)
+df_output.to_csv('../data/r_matched_gpt_4o_mini.csv', index=False)
