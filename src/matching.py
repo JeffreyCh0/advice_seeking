@@ -145,9 +145,10 @@ with open('../data/emb/zhihu_emb.pkl', 'rb') as f:
     raw = pickle.load(f)
     zh_sentences = raw[0]
     zh_emb = raw[1]
+    zh_id = raw[2]
 
-en_sentences = reddit.apply(lambda x: x['question'] + ' ' + x['detail'], axis=1).tolist()
-en_idx = reddit['message_id'].tolist()
+en_sentences = reddit.apply(lambda x: str(x['question'])+'\n'+str(x['detail']), axis=1).tolist()
+en_id = reddit['message_id'].tolist()
 num_en = len(en_sentences)
 num_zh = len(zh_sentences)
 
@@ -159,15 +160,16 @@ num_zh = len(zh_sentences)
 results = []
 top_k = 5
 list_top_k = []
+list_top_1 = []
 list_match = []
 
 # Convert to NumPy arrays for efficiency
 zh_sentences = np.array(zh_sentences, dtype=object)
+en_sentences = np.array(en_sentences, dtype=object)
+en_id = np.array(en_id, dtype=object)
 valid_mask = np.ones(num_en, dtype=bool)  # Track valid indices (True = selectable)
 
-for i, zh_question in tqdm(enumerate(zh_sentences)):
-    if i == 20:
-        break
+for i, zh_question in tqdm(enumerate(zh_sentences), total=num_zh):
     # Select only valid columns
     valid_similarity = np.where(valid_mask, similarity[i], -np.inf)  # Set invalid columns to -inf
 
@@ -177,32 +179,25 @@ for i, zh_question in tqdm(enumerate(zh_sentences)):
 
     top_k_sim = similarity[i][top_k_idx]
     selected_sentences = en_sentences[top_k_idx]
-    selected_idx = en_idx[top_k_idx]
+    selected_id = en_id[top_k_idx]
+
+    list_top_k.append([(sim, idx) for sim, idx in zip(top_k_sim, selected_id)])
 
     gpt_pick, gpt_pick_question = process_row(zh_question, selected_sentences)
-    selected_idx = top_k_idx['ABCDE'.index(gpt_pick)]
-    list_top_k.append([(sim, idx) for sim, idx in zip(top_k_sim, selected_idx)])
+    final_idx = top_k_idx['ABCDE'.index(gpt_pick)]
+    list_top_1.append(en_id[final_idx])
 
     bl_match = sim_check(gpt_pick_question, zh_question)
-    
-    
-    print(f'Chinese: {zh_question}')
-    print(f"English: {gpt_pick_question}")
-    print(f"Match: {bl_match}")
+    list_match.append(bl_match)
 
     # Mark selected indices as unavailable (instead of deleting)
     if bl_match:
-        valid_mask[selected_idx] = False  # These sentences are no longer selectable
-        print(f"dropped: {en_sentences[selected_idx][:50]}")
-        list_match.append(selected_idx)
-    else:
-        list_match.append(False)
+        valid_mask[final_idx] = False  # These sentences are no longer selectable
 
-    print("="*100)
 
 df_output = pd.DataFrame()
 
-df_output['zh_question'] = zh_sentences
+df_output['zh_question'] = zh_id
 df_output['top_1'] = [x[0][1] for x in list_top_k]
 df_output['top_1_sim'] = [x[0][0] for x in list_top_k]
 df_output['top_2'] = [x[1][1] for x in list_top_k]
@@ -213,7 +208,7 @@ df_output['top_4'] = [x[3][1] for x in list_top_k]
 df_output['top_4_sim'] = [x[3][0] for x in list_top_k]
 df_output['top_5'] = [x[4][1] for x in list_top_k]
 df_output['top_5_sim'] = [x[4][0] for x in list_top_k]
-
+df_output["gpt_pick"] = list_top_1
 df_output["gpt_pick_question"] = list_match
 
 
