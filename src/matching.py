@@ -126,11 +126,32 @@ def sim_check(eng_q, chi_q):
     
     return json.loads(response.choices[0].message.content)["response"]
 
-def process_row(question_detail, choices):
-    """Function to process each row"""
-    gpt_pick = ir_top5(question_detail, choices)
+def ir_top5_wrappper(question_detail, choices):
+    error_count = 0
+    while error_count < 3:
+        try:
+            gpt_pick = ir_top5(question_detail, choices)
+        except:
+            error_count += 1
+            continue
+    if error_count == 3:
+        gpt_pick = "A"
+        print("Error: GPT-4o-mini failed to respond. Defaulting to A.")
     gpt_pick_question = choices['ABCDE'.index(gpt_pick)]
     return gpt_pick, gpt_pick_question
+
+def sim_check_wrapper(eng_q, chi_q):
+    error_count = 0
+    while error_count < 3:
+        try:
+            bl_match = sim_check(eng_q, chi_q)
+        except:
+            error_count += 1
+            continue
+    if error_count == 3:
+        bl_match = False
+        print("Error: GPT-4o-mini failed to respond. Defaulting to False.")
+    return bl_match
 
 
 reddit = pd.read_csv('../data/reddit_post.csv')
@@ -183,11 +204,11 @@ for i, zh_question in tqdm(enumerate(zh_sentences), total=num_zh):
 
     list_top_k.append([(sim, idx) for sim, idx in zip(top_k_sim, selected_id)])
 
-    gpt_pick, gpt_pick_question = process_row(zh_question, selected_sentences)
+    gpt_pick, gpt_pick_question = ir_top5_wrappper(zh_question, selected_sentences)
     final_idx = top_k_idx['ABCDE'.index(gpt_pick)]
     list_top_1.append(en_id[final_idx])
 
-    bl_match = sim_check(gpt_pick_question, zh_question)
+    bl_match = sim_check_wrapper(gpt_pick_question, zh_question)
     list_match.append(bl_match)
 
     # Mark selected indices as unavailable (instead of deleting)
