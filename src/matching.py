@@ -131,7 +131,9 @@ def ir_top5_wrappper(question_detail, choices):
     while error_count < 3:
         try:
             gpt_pick = ir_top5(question_detail, choices)
-        except:
+            break
+        # except json.decoder.JSONDecodeError
+        except json.decoder.JSONDecodeError:
             error_count += 1
             continue
     if error_count == 3:
@@ -145,7 +147,8 @@ def sim_check_wrapper(eng_q, chi_q):
     while error_count < 3:
         try:
             bl_match = sim_check(eng_q, chi_q)
-        except:
+            break
+        except json.decoder.JSONDecodeError:
             error_count += 1
             continue
     if error_count == 3:
