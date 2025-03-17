@@ -62,7 +62,7 @@ def ir_top5(question, candidates):
             }
             }
         },
-        temperature=1,
+        temperature=0,
         max_completion_tokens=2048,
         top_p=1,
         frequency_penalty=0,
@@ -117,7 +117,7 @@ def sim_check(eng_q, chi_q):
             }
             }
         },
-        temperature=1,
+        temperature=0,
         max_completion_tokens=2048,
         top_p=1,
         frequency_penalty=0,
@@ -132,7 +132,6 @@ def ir_top5_wrappper(question_detail, choices):
         try:
             gpt_pick = ir_top5(question_detail, choices)
             break
-        # except json.decoder.JSONDecodeError
         except json.decoder.JSONDecodeError:
             error_count += 1
             continue
@@ -233,7 +232,7 @@ df_output['top_4_sim'] = [x[3][0] for x in list_top_k]
 df_output['top_5'] = [x[4][1] for x in list_top_k]
 df_output['top_5_sim'] = [x[4][0] for x in list_top_k]
 df_output["gpt_pick"] = list_top_1
-df_output["gpt_pick_question"] = list_match
+df_output["gpt_sim"] = list_match
 
 
 
